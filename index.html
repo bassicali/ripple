@@ -1,0 +1,277 @@
+
+<html>
+
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+        <link rel="stylesheet" href="style/bootstrap.css" />
+        <link rel="stylesheet" href="style/ui.css" />
+    </head>
+    
+    
+    <body>
+        <script src="dat.gui.min.js"></script>
+        <script src="math.js"></script>
+        <script src="shaders.js"></script>
+        <script src="camera.js"></script>
+        <script src="glhelpers.js"></script>
+        <script src="ripple.js"></script>
+
+        <script id="tex_coords" type="x-shader/x-vertex">
+            precision highp float;
+
+            attribute vec3 vertex;
+
+            uniform vec2 tex_size;
+
+            varying vec2 uv;
+            varying vec2 uvL;
+            varying vec2 uvR;
+            varying vec2 uvT;
+            varying vec2 uvB;
+
+            void main()
+            {
+                gl_Position = vec4(vertex.xy, 0.0, 1.0);
+                uv = vertex.xy * 0.5 + 0.5;
+
+                vec2 stride = 1.0 / tex_size;
+                uvL = uv - vec2(stride.x, 0.0);
+                uvR = uv + vec2(stride.x, 0.0);
+                uvT = uv + vec2(0.0, stride.y);
+                uvB = uv - vec2(0.0, stride.y);
+            }
+        </script>
+
+        <script id="surface_vert" type="x-shader/x-vertex">
+            precision highp float;
+
+            attribute vec3 vertex;
+            
+            uniform mat4 model;
+            uniform mat4 view;
+            uniform mat4 proj;
+            
+            uniform vec4 bounds; // xy=min, zw=max
+            uniform sampler2D height_map;
+            
+            varying vec3 coord;
+            varying vec3 coord_w;
+            
+            void main()
+            {
+                vec2 size = bounds.zw - bounds.xy;
+                vec2 height_uv = (vertex.xz + bounds.zw) / size;
+
+                float height =  texture2D(height_map, height_uv).x;
+                vec4 surface_pos = vec4(vertex.x, vertex.y + height, vertex.z, 1.0);
+                
+                gl_Position = proj * view * model * surface_pos;
+
+                //gl_Position = proj * view * model * vec4(vertex.xyz, 1.0);
+                coord = gl_Position.xyz;
+                coord_w = (model * vec4(vertex.xyz, 1.0)).xyz;
+            }
+        </script>
+
+        <script id="object_vert" type="x-shader/x-vertex">
+            precision highp float;
+
+            attribute vec3 vertex;
+
+            uniform mat4 model;
+            uniform mat4 view;
+            uniform mat4 proj;
+
+            varying vec3 coord_w;
+
+            void main()
+            {
+                coord_w = (model * vec4(vertex.xyz, 1.0)).xyz;
+                gl_Position = proj * view * model * vec4(vertex.xyz, 1.0);
+            }
+        </script>
+
+        <script id="surface_frag" type="x-shader/x-fragment">
+            precision highp float;
+
+            uniform vec4 bounds; // xy=min, zw=max
+            uniform sampler2D height_map;
+            uniform sampler2D normal_map;
+            uniform sampler2D velocity;
+
+            uniform vec3 surface_colour;
+            uniform vec3 light_colour;
+            uniform vec3 camera_pos;
+
+            uniform int display_field;
+            
+            varying vec3 coord;
+            varying vec3 coord_w;
+            
+            void main()
+            {
+                vec2 size = bounds.zw - bounds.xy;
+                vec2 stride = vec2(1.0) / size;
+                vec2 uv = (coord_w.xz + bounds.zw) / size;
+                
+                vec3 normal = texture2D(normal_map, uv).xyz;
+
+                vec3 ambient_light = 0.2 * light_colour;
+                vec3 light_dir = normalize(vec3(0.0, 20.0, 0.0) - coord_w);
+                vec3 diffuse_light = max(dot(normal, light_dir), 0.0) * light_colour;
+
+                vec3 view_dir = normalize(camera_pos - coord_w);
+                vec3 reflect_dir = reflect(-light_dir, normal); 
+                float spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32.0);
+                vec3 specular = 0.2 * spec * light_colour; 
+
+                vec3 colour = (ambient_light + diffuse_light + specular) * surface_colour;
+
+                if (display_field == 1)
+                {
+                    gl_FragColor = vec4(texture2D(height_map, uv).xyz, 1.0);
+                }
+                else if (display_field == 2)
+                {
+                    gl_FragColor = vec4(texture2D(velocity, uv).xy, 0.0, 1.0);
+                }
+                else if (display_field == 3)
+                {
+                    gl_FragColor = vec4(texture2D(normal_map, uv).xyz, 1.0);
+                }
+                else
+                {
+                    gl_FragColor = vec4(colour, 1.0);
+                }
+            }
+        </script>
+
+        <script id="object_frag" type="x-shader/x-fragment">
+            precision highp float;
+            
+            uniform vec3 colour;
+
+            varying vec3 coord_w;
+
+            void main()
+            {
+                gl_FragColor = vec4(coord_w, 1.0);
+            }
+        </script>
+
+        <script id="evolve_height_map" type="x-shader/x-fragment">
+            precision highp float;
+
+            uniform sampler2D height_map;
+            uniform vec4 bounds; // xy=min, zw=max
+            
+            uniform bool force_active;
+            uniform vec3 force_pos; // world coordinates
+            uniform float radius;
+            uniform float dissipation;
+
+            varying vec2 uv;
+            
+            void main()
+            {
+                vec2 size = bounds.zw - bounds.xy;
+                vec2 stride = 1.0 / size;
+                vec4 hC = texture2D(height_map, uv);
+                vec4 hL = texture2D(height_map, uv - vec2(stride.x, 0.0));
+                vec4 hR = texture2D(height_map, uv + vec2(stride.x, 0.0));
+                vec4 hT = texture2D(height_map, uv + vec2(0.0, stride.y));
+                vec4 hB = texture2D(height_map, uv - vec2(0.0, stride.y));
+            
+                float new_height = (hL.x + hR.x + hT.x + hB.x) / 2.0 - hC.y;
+            
+                if (force_active && distance(((uv - 0.5) * 2.0) * bounds.zw, force_pos.xz) <= radius)
+                {
+                    new_height += 1.0;
+                }
+                
+                new_height *= dissipation;
+
+                gl_FragColor = vec4(new_height, hC.x, hC.y, 1.0);
+            }
+        </script>
+
+        <script id="calc_normal_map" type="x-shader/x-fragment">
+            precision highp float;
+
+            uniform sampler2D height_map;
+            uniform vec4 bounds;
+            
+            varying vec2 uv;
+            
+            void main()
+            {
+                vec2 size = bounds.zw - bounds.xy;
+                vec2 px_size = 1.0 / size;
+            
+                float hC = texture2D(height_map, uv).x;
+                float hL = texture2D(height_map, uv + vec2(-px_size.x, 0)).x;
+                float hT = texture2D(height_map, uv + vec2(0, px_size.y)).x;
+            
+                vec2 coord = (uv - vec2(0.5)) * 2.0;
+                coord *= bounds.zw;
+            
+                vec3 posC = vec3(coord.x, hC, coord.y);
+                vec3 posL = vec3(coord.x - 1.0, hL, coord.y);
+                vec3 posT = vec3(coord.x, hT, coord.y - 1.0);
+            
+                vec3 norm = normalize(cross(posL - posC, posC - posT));
+                gl_FragColor = vec4(norm, 1.0);
+            }
+        </script>
+
+        <script id="calc_velocity" type="x-shader/x-fragment">
+            precision highp float;
+
+            uniform sampler2D height_map;
+            uniform sampler2D velocity;
+            
+            varying vec2 uv;
+            varying vec2 uvL;
+            varying vec2 uvR;
+            varying vec2 uvT;
+            varying vec2 uvB;
+
+            void main()
+            {
+                float L = texture2D(height_map, uvL).x;
+                float R = texture2D(height_map, uvR).x;
+                float T = texture2D(height_map, uvT).x;
+                float B = texture2D(height_map, uvB).x;
+
+                vec2 elevation_gradient = vec2(R-L, T-B)/2.0;
+
+                vec2 v0 = texture2D(velocity, uv).xy;
+
+                // sign is negative since velocity increases from high elevation to low elevation
+                vec2 v1 = (v0 - elevation_gradient) * 0.93;
+
+                gl_FragColor = vec4(v1, 0.0, 1.0);
+            }
+        </script>
+
+        <script id="show_texture" type="x-shader/x-fragment">
+            precision highp float;
+
+            uniform sampler2D tex;
+
+            varying vec2 uv;
+
+            void main()
+            {
+                //gl_FragColor = texture2D(tex, uv);
+                gl_FragColor = vec4(texture2D(tex, uv).rgb, 1.0);
+                //gl_FragColor = vec4(1.0, 1.0, 0.0, 1.0);
+            }
+        </script>
+
+        <canvas id="mainCanvas" ></canvas>
+
+    </body>
+    
+    </html>
