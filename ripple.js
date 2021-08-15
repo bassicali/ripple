@@ -183,50 +183,19 @@ function init() {
         updateInvProjViewMatrix();
     });
 
-    sim.canvas.addEventListener('mousedown', ev => {
-        if (ev.button == 2) {
-            sim.rightMouseDown = true;
-        }
-        else if (ev.button == 0) { 
-            sim.leftMouseDown = true;
-        }
-    });
+    sim.canvas.addEventListener('mousedown', e => mouseEvent('down', e, false, e.button == 2));
+    sim.canvas.addEventListener('mouseup', e => mouseEvent('up', e, false, e.button == 2));
+    sim.canvas.addEventListener('mousemove', e => mouseEvent('move', e, false, e.button == 2));
 
-    sim.canvas.addEventListener('mouseup', ev => {
-        if (ev.button == 2) {
-            sim.rightMouseDown = false;
-            sim.lastMousePos = null;
-        }
-        else if (ev.button == 0) {
-            sim.leftMouseDown = false;
-            force.pos = null;
-        }
-    });
-
-    sim.canvas.addEventListener('mousemove', ev => {
-        if (sim.rightMouseDown) {
-            let pos = getRelativeMousePos(ev);
-
-            if (sim.lastMousePos != null) {
-                let delta = pos.subtract(sim.lastMousePos);
-                sim.camera.pan(new Vec2(delta.x * 0.01, delta.y * 0.01));
-                updateInvProjViewMatrix();
-            }
-
-            sim.lastMousePos = pos;
-        }
-        else if (sim.leftMouseDown) {
-            let pos = getRelativeMousePos(ev);
-            rayCastFromScreen(pos.x, gl.drawingBufferHeight - pos.y);
-        }
-    });
+    sim.canvas.addEventListener('touchstart', e => mouseEvent('down', e, true, false));
+    sim.canvas.addEventListener('touchend', e => mouseEvent('up', e, true, false));
+    sim.canvas.addEventListener('touchmove', e => mouseEvent('move', e, true, false));
 
     document.addEventListener('keydown', e => {
         if (e.key in keyHandlers) {
             keyHandlers[e.key]();
         }
     });
-
 
     let w = 1 - 0.5 / surface.width;
     let h = 1 - 0.5 / surface.height;
@@ -315,15 +284,18 @@ function init() {
     }
 
     gl.enable(gl.DEPTH_TEST);
-
     setupGUI();
-
+    if (env.isMobile) {
+        document.getElementById('controls_info').style.display = 'none';
+    }
+    
     window.requestAnimationFrame(tick);
 }
 
 function setupGUI() {
     gui = new dat.GUI({
-        name: 'Settings'
+        name: 'Settings',
+        closed: env.isMobile
     });
 
     let onSurfaceResolutionChanged = function() {
@@ -340,6 +312,48 @@ function setupGUI() {
     gui.add(simSettings, 'RippleRadius', 0.5, 10, 0.5);
 
     gui.__controllers[0].domElement.disabled = true;
+}
+
+function mouseEvent(type, event, isTouch, isRightButton) {
+    let pos;
+
+    if (isTouch) {
+        event.preventDefault();
+        let idx = event.changedTouches.length - 1;
+        pos = getRelativeMousePos(event.changedTouches[idx]);
+    }
+    else {
+        pos = getRelativeMousePos(event);
+    }
+
+    if (type == 'down') {
+        sim.rightMouseDown = isRightButton;
+        sim.leftMouseDown = !isRightButton;
+    }
+    else if (type == 'up') {
+        if (isRightButton) {
+            sim.rightMouseDown = false;
+            sim.lastMousePos = null;
+        }
+        else {
+            sim.leftMouseDown = false;
+            force.pos = null;
+        }
+    }
+    else if (type == 'move') {
+        if (sim.rightMouseDown) {
+            if (sim.lastMousePos != null) {
+                let delta = pos.subtract(sim.lastMousePos);
+                sim.camera.pan(new Vec2(delta.x * 0.01, delta.y * 0.01));
+                updateInvProjViewMatrix();
+            }
+
+            sim.lastMousePos = pos;
+        }
+        else if (sim.leftMouseDown) {
+            rayCastFromScreen(pos.x, gl.drawingBufferHeight - pos.y);
+        }
+    }
 }
 
 function resize() {
