@@ -25,11 +25,19 @@ var sim = {
     lastMousePos: null
 }
 
+const SURFACE_WIDTH = 80;
+const SURFACE_HEIGHT = 150;
+
 var gui = null;
 var simSettings = {
     FrameRate: '',
     KeySensitivity: 0.8,
     WheelSensitivity: 0.05,
+    XDivisions: SURFACE_WIDTH,
+    ZDivisions: SURFACE_HEIGHT,
+    HeightScale: 1.0,
+    RippleRadius: 2.0,
+    Dissipation: 0.96
 }
 
 var fbos = {
@@ -38,14 +46,15 @@ var fbos = {
 }
 
 var surface = {
-    width: 80,
-    height: 150,
+    width: SURFACE_WIDTH,
+    height: SURFACE_HEIGHT,
     cornerTL: null,
     cornerTR: null,
     cornerBL: null,
     cornerBR: null,
     mesh: null,
-    model: null
+    model: null,
+    resolutionChanged: false
 }
 
 var floaties = {
@@ -172,7 +181,6 @@ function init() {
         ev.preventDefault();
         sim.camera.zoom(ev.deltaY * simSettings.WheelSensitivity);
         updateInvProjViewMatrix();
-        updatePosDisplay();
     });
 
     sim.canvas.addEventListener('mousedown', ev => {
@@ -192,7 +200,6 @@ function init() {
         else if (ev.button == 0) {
             sim.leftMouseDown = false;
             force.pos = null;
-            updatePosDisplay();
         }
     });
 
@@ -204,7 +211,6 @@ function init() {
                 let delta = pos.subtract(sim.lastMousePos);
                 sim.camera.pan(new Vec2(delta.x * 0.01, delta.y * 0.01));
                 updateInvProjViewMatrix();
-                updatePosDisplay();
             }
 
             sim.lastMousePos = pos;
@@ -219,8 +225,6 @@ function init() {
         if (e.key in keyHandlers) {
             keyHandlers[e.key]();
         }
-
-        updatePosDisplay();
     });
 
 
@@ -253,7 +257,6 @@ function init() {
     sim.projection = Matrix4x4.createProjection(45, sim.canvas.width / sim.canvas.height, 0.1, 500);
     
     sim.camera = new Camera({ pos: new Vec3(0, 37, 97), target: new Vec3(0, 0, 0) });
-    //sim.camera = new Camera({ pos: new Vec3(2.36, 67.89, 156.79), target: new Vec3(0, 0, 0) });
     updateInvProjViewMatrix();
 
     surface.size = new Vec2(surface.width, surface.height);
@@ -262,8 +265,7 @@ function init() {
     surface.cornerTL = new Vec3(surface.cornerBL.x, 0, surface.cornerTR.z);
     surface.cornerBR = new Vec3(surface.cornerTR.x, 0, surface.cornerBL.z);
 
-    const meshScale = 1;
-    surface.mesh = createSurfaceMesh(surface.cornerBL, surface.cornerTR, surface.width * meshScale, surface.height * meshScale);
+    surface.mesh = createSurfaceMesh(surface.cornerBL, surface.cornerTR, simSettings.XDivisions, simSettings.ZDivisions);
     fbos.heightMap = new SwapFBO(surface.width, surface.height);
     fbos.normalMap = new FBO(surface.width, surface.height);
     fbos.velocity = new SwapFBO(surface.width, surface.height);
@@ -312,8 +314,6 @@ function init() {
         floaties.matrices.push(new Matrix4x4([sc, 0, 0, 0], [0, sc, 0, 0], [0, 0, sc, 0], [x, y, z, 1]));
     }
 
-    updatePosDisplay();
-
     gl.enable(gl.DEPTH_TEST);
 
     setupGUI();
@@ -326,9 +326,18 @@ function setupGUI() {
         name: 'Settings'
     });
 
+    let onSurfaceResolutionChanged = function() {
+        surface.resolutionChanged = true;
+    };
+
     gui.add(simSettings, 'FrameRate');
     gui.add(simSettings, 'KeySensitivity', 0.1, 5.0, 0.1);
     gui.add(simSettings, 'WheelSensitivity', 0.01, 1.0, 0.01);
+    gui.add(simSettings, 'XDivisions', SURFACE_WIDTH / 4, SURFACE_WIDTH * 4, 10).onFinishChange(onSurfaceResolutionChanged);
+    gui.add(simSettings, 'ZDivisions', SURFACE_HEIGHT / 5, SURFACE_HEIGHT * 4, 10).onFinishChange(onSurfaceResolutionChanged);
+    gui.add(simSettings, 'Dissipation', 0.5, 1.0, 0.01);
+    gui.add(simSettings, 'HeightScale', 0.5, 10, 0.5);
+    gui.add(simSettings, 'RippleRadius', 0.5, 10, 0.5);
 
     gui.__controllers[0].domElement.disabled = true;
 }
@@ -345,6 +354,12 @@ function tick(timestamp) {
     simSettings.FrameRate = `${(1 / sim.delta_t).toFixed(2)} Hz`;
 
     if (!sim.paused) {
+        if (surface.resolutionChanged) {
+            gl.deleteBuffer(surface.mesh.vbo);
+            surface.mesh = createSurfaceMesh(surface.cornerBL, surface.cornerTR, simSettings.XDivisions, simSettings.ZDivisions);
+            surface.resolutionChanged = false;
+        }
+
         evolveHeightMap();
         calculateVelocity();
         moveObjects();
@@ -395,8 +410,9 @@ function evolveHeightMap() {
     shaders.evolveHeightMap.setVec2('tex_size', surface.size);
     shaders.evolveHeightMap.setVec4('bounds', new Vec4(surface.cornerBL.x, surface.cornerBL.z, surface.cornerTR.x, surface.cornerTR.z));
     shaders.evolveHeightMap.setTexture('height_map', fbos.heightMap.front.texture, 0);
-    shaders.evolveHeightMap.setFloat('radius', 2.0);
-    shaders.evolveHeightMap.setFloat('dissipation', 0.9);
+    shaders.evolveHeightMap.setFloat('radius', simSettings.RippleRadius);
+    shaders.evolveHeightMap.setFloat('dissipation', simSettings.Dissipation);
+    shaders.evolveHeightMap.setFloat('height_scale', simSettings.HeightScale);
     shaders.evolveHeightMap.setInt('force_active', force.pos != null ? 1 : 0);
     shaders.evolveHeightMap.setVec3('force_pos', force.pos != null ? force.pos : new Vec3(0, 0, 0));
     
@@ -447,10 +463,9 @@ function moveObjects() {
 
         gl.readPixels(texPosX, texPosY, 2, 2, gl.RGBA, gl.FLOAT, pixels);
 
-        //let velocity = new Vec3(1, 0, 1);
-        let velocity = new Vec3(pixels[0], 0, pixels[1]);
+        let velocity = new Vec3(pixels[0], 0, pixels[2]);
         let newPos = pos.add(velocity.mulf(1.0));
-        newPos = newPos.clamp(new Vec3(surface.cornerBL.x, 0, surface.cornerBL.z), new Vec3(surface.cornerTR.x, 0, surface.cornerTR.z));
+        newPos = newPos.clamp(new Vec3(surface.cornerBL.x, 0, surface.cornerBL.z), new Vec3(surface.cornerTR.x, 10, surface.cornerTR.z));
         floaties.matrices[i].setPos(newPos);
         newPositions.push(newPos);
         
@@ -519,8 +534,6 @@ function rayCastFromScreen(x, y) {
     else {
         force.pos = null;
     }
-
-    updatePosDisplay();
 }
 
 function lineIntersectsRect(lp, ld, tl, tr, bl, br) {
@@ -585,13 +598,4 @@ function getRelativeMousePos(mouse) {
     let x = (mouse.clientX - rect.left) * scx;
     let y = (mouse.clientY - rect.top) * scy;
     return new Vec2(x, y);
-}
-
-function updatePosDisplay() {
-    // let text = `Position: (${sim.camera.pos.toString()})    Direction: (${sim.camera.dir.mulf(-1).toString()})`;
-    // if (force.pos != null) {
-    //     text += ` Force: (${force.pos.toString()})`;
-    // }
-
-    // sim.posDisplay.innerText = text;
 }
