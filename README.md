@@ -6,8 +6,10 @@ Other than the height map, the simulation also calculates a velocity field for m
 
 My implementation is written with plain webgl. The lighting isn't as nice as what three.js offers; I basically followed along with the [Basic Lighting chapter](https://learnopengl.com/Lighting/Basic-Lighting) from learnopengl.com. Nevertheless it still creates a pretty cool simulation. 
 
+Hosted on [github.io](https://bassicali.github.io/ripple/).
+
 <img src="images/screenshot.png">
 
 ## Credits
-- [Three.js GPGPU Water Example](https://threejs.org/examples/webgl_gpgpu_water.html)
+- [Three.js Water Example](https://threejs.org/examples/webgl_gpgpu_water.html)
 - [dat.gui](https://github.com/dataarts/dat.gui)

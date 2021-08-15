@@ -288,7 +288,7 @@ function init() {
     if (env.isMobile) {
         document.getElementById('controls_info').style.display = 'none';
     }
-    
+
     window.requestAnimationFrame(tick);
 }
 
@@ -357,8 +357,8 @@ function mouseEvent(type, event, isTouch, isRightButton) {
 }
 
 function resize() {
-    sim.canvas.width = document.body.clientWidth;
-    sim.canvas.height = document.body.clientHeight;
+    sim.canvas.width = document.body.innerWidth;
+    sim.canvas.height = document.body.innerHeight;
 }
 
 function tick(timestamp) {
